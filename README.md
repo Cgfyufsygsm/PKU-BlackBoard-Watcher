@@ -30,11 +30,13 @@
    - 课程名
    - 标题
    - 内容（正文文本或可读摘要）
-   - 发布时间（若页面可读到）
+   - 发布时间：不记录（页面通常无明确发布时间）
    - 附件：只需要标记“是否有附件”（必要时可补充附件数量/文件名）
    - 详情 URL
+   - TODO：有些老师会在这个板块下面布置作业（我也不理解为什么），比如自然语言处理。到时候需要特殊解析。
 
 3. 课程作业（Assignments）
+   - 课程作业的页面和教学内容没有本质区别，都是 listContent.jsp 列出来的。所以解析方式可以参考课程内容。但是需要注意的是，我们需要重点解析**可提交的作业**，点进去可以看得到作业到期日期以及分数（如果还没有提交）。
    - 课程名
    - 标题
    - 发布时间（若页面可读到）
@@ -93,6 +95,9 @@
 - 离线解析已保存的公告 HTML：`python -m app.main --parse-announcements-html data/debug_announcements.html`
 - 把公告字段导出成 JSON（方便人工核对）：`python -m app.main --parse-announcements-html data/debug_announcements.html --announcements-json data/announcements.json`
 - 在线抓取并导出 JSON：`python -m app.main --debug-announcements --course-query "信息学中的概率统计" --announcements-json data/announcements.json`
+- 抓取某门课“教学内容”的 debug HTML：`python -m app.main --debug-teaching-content --course-query "信息学中的概率统计" --teaching-content-json data/teaching_content.json`
+  - Debug 文件：`data/debug_teaching_content.html`
+- 离线解析已保存的“教学内容”HTML：`python -m app.main --parse-teaching-content-html data/debug_teaching_content.html --teaching-content-json data/teaching_content.json`
 
 ## 产物位置
 

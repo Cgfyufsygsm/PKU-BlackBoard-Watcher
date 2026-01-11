@@ -6,7 +6,14 @@ import json
 import logging
 from pathlib import Path
 
-from app.bb import check_login, debug_dump_course_announcements, fetch_courses_from_portal, parse_announcements_html
+from app.bb import (
+    check_login,
+    debug_dump_course_announcements,
+    debug_dump_teaching_content,
+    fetch_courses_from_portal,
+    parse_announcements_html,
+    parse_teaching_content_html,
+)
 from app.config import load_config
 from app.logging_utils import setup_logging
 from app.store import init_db
@@ -24,9 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check-login", action="store_true", help="Open a page using storage_state and log title/url.")
     parser.add_argument("--list-courses", action="store_true", help="Dump portal HTML and extract student courses.")
     parser.add_argument("--debug-announcements", action="store_true", help="Dump HTML for one course announcements page.")
+    parser.add_argument("--debug-teaching-content", action="store_true", help='Dump HTML for one course "教学内容" page.')
     parser.add_argument("--course-query", default="", help="Substring to match the target course in portal list.")
     parser.add_argument("--parse-announcements-html", default="", help="Parse a saved announcements HTML file (offline).")
+    parser.add_argument("--parse-teaching-content-html", default="", help='Parse a saved "教学内容" HTML file (offline).')
     parser.add_argument("--announcements-json", default="", help="Write parsed announcements to a JSON file.")
+    parser.add_argument("--teaching-content-json", default="", help='Write parsed "教学内容" items to a JSON file.')
     args = parser.parse_args(argv)
 
     root = _project_root()
@@ -39,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.announcements_json and not (args.parse_announcements_html or args.debug_announcements):
         logger.error("--announcements-json must be used with --parse-announcements-html or --debug-announcements")
+        return 2
+    if args.teaching_content_json and not (args.parse_teaching_content_html or args.debug_teaching_content):
+        logger.error("--teaching-content-json must be used with --parse-teaching-content-html or --debug-teaching-content")
         return 2
 
     if args.parse_announcements_html:
@@ -58,6 +71,26 @@ def main(argv: list[str] | None = None) -> int:
                 a.get("published_at_raw", ""),
                 a.get("title", ""),
                 a.get("url", ""),
+            )
+        logger.info("done")
+        return 0
+
+    if args.parse_teaching_content_html:
+        html_path = Path(args.parse_teaching_content_html)
+        html = html_path.read_text(encoding="utf-8")
+        items = parse_teaching_content_html(html=html, base_url=config.bb_base_url)
+        logger.info('parsed teaching content from %s: %d', html_path, len(items))
+        if args.teaching_content_json:
+            out_path = Path(args.teaching_content_json)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logger.info("wrote teaching content json: %s", out_path)
+        for it in items[:10]:
+            logger.info(
+                "teaching_content: %s | attachments=%s | %s",
+                it.get("title", ""),
+                it.get("has_attachments", False),
+                it.get("url", ""),
             )
         logger.info("done")
         return 0
@@ -122,6 +155,38 @@ def main(argv: list[str] | None = None) -> int:
                 a.get("published_at_raw", ""),
                 a.get("title", ""),
                 a.get("url", ""),
+            )
+
+    if args.debug_teaching_content:
+        if not args.course_query:
+            logger.error("--course-query is required for --debug-teaching-content")
+            return 2
+        result = asyncio.run(
+            debug_dump_teaching_content(
+                state_path=config.bb_state_path,
+                portal_url=config.bb_courses_url or config.bb_base_url,
+                course_query=args.course_query,
+                headless=config.headless,
+                portal_html_path=root / "data" / "debug_courses.html",
+                course_entry_html_path=root / "data" / "debug_course_entry.html",
+                teaching_content_html_path=root / "data" / "debug_teaching_content.html",
+            )
+        )
+        logger.info("debug teaching content ok: %s (course_id=%s)", result.course.name, result.course.course_id)
+        logger.info("course_entry_url: %s", result.course_entry_url)
+        logger.info("teaching_content_url: %s", result.teaching_content_url)
+        logger.info("teaching content items found: %d", len(result.items))
+        if args.teaching_content_json:
+            out_path = Path(args.teaching_content_json)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(result.items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logger.info("wrote teaching content json: %s", out_path)
+        for it in result.items[:10]:
+            logger.info(
+                "teaching_content: %s | attachments=%s | %s",
+                it.get("title", ""),
+                it.get("has_attachments", False),
+                it.get("url", ""),
             )
 
     logger.info("done")
