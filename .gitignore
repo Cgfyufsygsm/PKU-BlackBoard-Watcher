@@ -8,6 +8,7 @@ data/state.db
 data/*.db
 data/storage_state.json
 data/debug_*.html
+data/debug_*_frames/
+data/announcements.json
 
 logs/*.log
-

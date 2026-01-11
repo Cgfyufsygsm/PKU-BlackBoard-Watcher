@@ -7,6 +7,7 @@
 - Step A：项目骨架 + `python -m app.main` 可运行，日志写入 `logs/run.log`
 - Step B：Playwright 导出登录态 `data/storage_state.json`，并可做登录态校验
 - Step C：从 portal 页面保存 `data/debug_courses.html`，并从“在以下课程中，您是学生”区域提取当前学期课程链接（保守策略 + fallback）
+- 代码结构：`app/bb/` 已按登录/课程/公告拆分模块，方便后续继续扩展教学内容/作业/成绩
 
 ## 下一步（准备做）
 
@@ -20,8 +21,9 @@
 
 1. 课程通知（Announcements）
    - 课程名
+   - 课程唯一标识（`course_id`，用于跨学期同名课程）
    - 标题/内容（正文文本或可读摘要）
-   - 发布时间（若页面可读到）
+   - 发布时间：原始字符串 + 规范化时间（ISO-8601，带 `+08:00`）
    - 详情 URL
 
 2. 教学内容（Course Content / Materials）
@@ -85,6 +87,12 @@
 - 校验登录态：`python -m app.main --check-login`
 - 保存 portal HTML + 抓“学生”课程列表：`python -m app.main --list-courses`
   - Debug 文件：`data/debug_courses.html`
+- 抓取某门课“课程通知”的 debug HTML：`python -m app.main --debug-announcements --course-query "信息学中的概率统计"`
+  - Debug 文件：`data/debug_course_entry.html`、`data/debug_announcements.html`
+  - 同时会在日志里输出解析到的公告数量与前 10 条（发布时间/标题/URL）
+- 离线解析已保存的公告 HTML：`python -m app.main --parse-announcements-html data/debug_announcements.html`
+- 把公告字段导出成 JSON（方便人工核对）：`python -m app.main --parse-announcements-html data/debug_announcements.html --announcements-json data/announcements.json`
+- 在线抓取并导出 JSON：`python -m app.main --debug-announcements --course-query "信息学中的概率统计" --announcements-json data/announcements.json`
 
 ## 产物位置
 
@@ -92,6 +100,7 @@
 - 登录态：`data/storage_state.json`
 - SQLite：`data/state.db`（目前仅初始化建表）
 - Debug HTML：`data/debug_courses.html`
+  - 通知 debug：`data/debug_course_entry.html`、`data/debug_announcements.html`
 
 ## 给 cron 的入口（后续会完善）
 
