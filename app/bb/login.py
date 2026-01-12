@@ -102,73 +102,164 @@ async def refresh_storage_state_with_credentials(
         context = await browser.new_context()
         page = await context.new_page()
         try:
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            async def safe_goto(url: str) -> None:
+                import asyncio
+
+                last: Exception | None = None
+                for attempt in range(1, 4):
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        return
+                    except Exception as e:  # noqa: BLE001
+                        last = e
+                        msg = str(e)
+                        transient = any(
+                            tok in msg
+                            for tok in (
+                                "ERR_NETWORK_CHANGED",
+                                "ERR_CONNECTION_RESET",
+                                "ERR_INTERNET_DISCONNECTED",
+                                "ERR_NAME_NOT_RESOLVED",
+                                "ERR_CONNECTION_TIMED_OUT",
+                            )
+                        )
+                        if transient and attempt < 3:
+                            await asyncio.sleep(0.4 * attempt)
+                            continue
+                        raise
+                if last:
+                    raise last
+
+            # Prefer opening the SSO entrypoint. For PKU Blackboard, `bb-sso-BBLEARN/login.html`
+            # redirects to IAAA (no need to deal with Blackboard's built-in login page).
+            await safe_goto(login_url)
+            # Allow the redirect chain to complete.
+            try:
+                await page.wait_for_selector("input[type=password]", timeout=8_000)
+            except Exception:
+                # Fallback: some deployments redirect to a service-bound login page from verify_url.
+                await safe_goto(verify_url)
 
             async def maybe_fill_login_form() -> bool:
-                # Try a set of common selectors used by CAS/IdP login pages.
-                user_selectors = [
-                    'input[name="username"]',
-                    'input#username',
-                    'input[name="userName"]',
-                    'input[name="user"]',
-                    'input[type="text"]',
-                ]
-                pass_selectors = [
-                    'input[name="password"]',
-                    'input#password',
-                    'input[name="pass"]',
-                    'input[type="password"]',
-                ]
+                # Locate the password field first (most reliable).
+                pass_locator = page.locator("input[type=password]").first
+                if not await pass_locator.count():
+                    try:
+                        await page.wait_for_selector("input[type=password]", timeout=3_000)
+                    except Exception:
+                        return False
+                    pass_locator = page.locator("input[type=password]").first
+                    if not await pass_locator.count():
+                        return False
+
+                # Find username input near the password input (previous visible input).
+                user_locator = page.locator(
+                    "xpath=//input[@type='password']/preceding::input[not(@type='hidden') and not(@disabled)][1]"
+                ).first
+                if not await user_locator.count():
+                    user_selectors = [
+                        'input[name="username"]',
+                        'input#username',
+                        'input[name="userName"]',
+                        'input[name="user"]',
+                        'input[name="uid"]',
+                        'input[name="id"]',
+                        'input[type="text"]',
+                    ]
+                    user_locator = None
+                    for sel in user_selectors:
+                        loc = page.locator(sel).first
+                        if await loc.count():
+                            user_locator = loc
+                            break
+                    if user_locator is None:
+                        return False
+
                 submit_selectors = [
                     'button[type="submit"]',
                     'input[type="submit"]',
                     'button:has-text("登录")',
                     'button:has-text("Log In")',
                     'button:has-text("Sign in")',
+                    'input[value="登录"]',
                 ]
-
-                user_locator = None
-                for sel in user_selectors:
-                    loc = page.locator(sel).first
-                    if await loc.count():
-                        user_locator = loc
-                        break
-                pass_locator = None
-                for sel in pass_selectors:
-                    loc = page.locator(sel).first
-                    if await loc.count():
-                        pass_locator = loc
-                        break
-                if user_locator is None or pass_locator is None:
-                    return False
 
                 await user_locator.fill(username)
                 await pass_locator.fill(password)
 
-                for sel in submit_selectors:
-                    btn = page.locator(sel).first
-                    if await btn.count():
-                        await btn.click()
-                        return True
+                # Prefer submit button in the same form as password.
+                # PKU IAAA uses #logon_button.
+                logon_btn = page.locator("#logon_button").first
+                if await logon_btn.count():
+                    try:
+                        async with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
+                            await logon_btn.click()
+                    except Exception:
+                        await logon_btn.click()
+                    return True
 
-                # Fallback: press Enter on password field.
-                await pass_locator.press("Enter")
-                return True
-
-            filled = await maybe_fill_login_form()
-            if filled:
-                # Wait for navigation/redirect chain.
                 try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                    form_submit = page.locator(
+                        "xpath=//input[@type='password']/ancestor::form[1]//button|//input[@type='password']/ancestor::form[1]//input[@type='submit']"
+                    ).first
+                    if await form_submit.count():
+                        try:
+                            async with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
+                                await form_submit.click()
+                        except Exception:
+                            await form_submit.click()
+                        return True
                 except Exception:
                     pass
 
+                for sel in submit_selectors:
+                    btn = page.locator(sel).first
+                    if await btn.count():
+                        try:
+                            async with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
+                                await btn.click()
+                        except Exception:
+                            await btn.click()
+                        return True
+
+                # Fallback: press Enter on password field.
+                try:
+                    async with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
+                        await pass_locator.press("Enter")
+                except Exception:
+                    await pass_locator.press("Enter")
+                return True
+
+            filled = await maybe_fill_login_form()
+            if not filled:
+                return LoginRefreshResult(ok=False, final_url=page.url, note=f"cannot find login form fields (url={page.url})")
+
+            # Wait for navigation/redirect chain.
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+            except Exception:
+                pass
+            # Give SSO redirects time to finish and set cookies before verifying.
+            try:
+                await page.wait_for_url(lambda u: "course.pku.edu.cn" in u, timeout=timeout_ms)
+            except Exception:
+                pass
+
             # Verify by opening a URL that requires authentication.
-            await page.goto(verify_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            await safe_goto(verify_url)
             final_url = page.url
             lowered = final_url.lower()
             if "login" in lowered or "sso" in lowered:
-                return LoginRefreshResult(ok=False, final_url=final_url, note="still redirected to login after credential submit")
+                # Sometimes the redirect chain needs an extra round-trip.
+                try:
+                    await page.wait_for_timeout(800)
+                    await safe_goto(verify_url)
+                    final_url = page.url
+                    lowered = final_url.lower()
+                except Exception:
+                    pass
+            if "login" in lowered or "sso" in lowered:
+                return LoginRefreshResult(ok=False, final_url=final_url, note=f"still redirected to login (url={final_url})")
 
             # Persist storage state.
             await context.storage_state(path=str(state_path))
@@ -194,9 +285,12 @@ async def ensure_login(
     - If invalid and credentials provided, refresh storage_state automatically
     - Re-check and return the final result
     """
-    check = await check_login(state_path=state_path, check_url=verify_url, headless=headless, timeout_ms=timeout_ms)
-    if check.ok:
-        return check
+    if state_path.exists():
+        check = await check_login(state_path=state_path, check_url=verify_url, headless=headless, timeout_ms=timeout_ms)
+        if check.ok:
+            return check
+    else:
+        check = LoginCheckResult(ok=False, final_url="", title="", note=f"storage_state not found: {state_path}")
 
     if username and password:
         logger.warning("login state invalid; attempting auto refresh with BB_USERNAME/BB_PASSWORD")
@@ -209,8 +303,9 @@ async def ensure_login(
             headless=headless,
             timeout_ms=timeout_ms,
         )
-        if refreshed.ok:
+        if refreshed.ok and state_path.exists():
             return await check_login(state_path=state_path, check_url=verify_url, headless=headless, timeout_ms=timeout_ms)
         logger.error("auto refresh failed: %s", refreshed.note)
+        return LoginCheckResult(ok=False, final_url=refreshed.final_url, title="", note=f"auto refresh failed: {refreshed.note}")
 
     return check

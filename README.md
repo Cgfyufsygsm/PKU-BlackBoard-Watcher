@@ -15,7 +15,10 @@
 ## 快速开始
 
 1) 安装依赖（建议在你的 conda 环境里，比如 `bbwatcher`）：
-- `bash scripts/init_playwright.sh`
+- `conda activate bbwatcher`
+- `python -m pip install -r requirements.txt`
+- 安装 Playwright 浏览器：`python -m playwright install chromium`
+- 如果提示缺少系统依赖：按提示安装（Ubuntu/Debian 可用 `python -m playwright install-deps chromium`，可能需要 `sudo`）
 
 2) 配置：
 - 从 `.env.example` 复制为 `.env`
@@ -54,9 +57,6 @@
 
 - Python 3.10+（推荐使用你的 conda 环境，例如 `bbwatcher`）
 - Playwright（Chromium）
-
-安装依赖与浏览器：
-- `bash scripts/init_playwright.sh`
 
 如果你使用 conda 环境运行，建议先：
 - `conda activate bbwatcher`

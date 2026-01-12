@@ -81,7 +81,7 @@ def load_config(project_root: Path) -> Config:
         bb_password=getenv("BB_PASSWORD", ""),
         db_path=db_path,
         bark_endpoint=getenv("BARK_ENDPOINT", ""),
-        poll_limit_per_run=_as_int(getenv("POLL_LIMIT_PER_RUN"), 5),
+        poll_limit_per_run=_as_int(getenv("POLL_LIMIT_PER_RUN"), 100),
         headless=_as_bool(getenv("HEADLESS"), True),
         log_path=log_path,
     )
