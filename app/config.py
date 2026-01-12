@@ -46,6 +46,8 @@ class Config:
     bb_login_url: str
     bb_courses_url: str
     bb_state_path: Path
+    bb_username: str
+    bb_password: str
 
     db_path: Path
     bark_endpoint: str
@@ -75,6 +77,8 @@ def load_config(project_root: Path) -> Config:
         bb_login_url=getenv("BB_LOGIN_URL", ""),
         bb_courses_url=getenv("BB_COURSES_URL", ""),
         bb_state_path=bb_state_path,
+        bb_username=getenv("BB_USERNAME", ""),
+        bb_password=getenv("BB_PASSWORD", ""),
         db_path=db_path,
         bark_endpoint=getenv("BARK_ENDPOINT", ""),
         poll_limit_per_run=_as_int(getenv("POLL_LIMIT_PER_RUN"), 5),

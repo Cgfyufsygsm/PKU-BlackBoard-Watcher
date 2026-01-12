@@ -13,6 +13,7 @@ from app.bb import (
     debug_dump_assignments,
     debug_dump_grades,
     debug_dump_teaching_content,
+    ensure_login,
     fetch_all_items,
     fetch_courses_from_portal,
     parse_announcements_html,
@@ -49,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fetch-all", action="store_true", help="Fetch all courses and all boards into unified Items.")
     parser.add_argument("--run", action="store_true", help="Fetch all items and push Bark notifications (Step E).")
     parser.add_argument("--dry-run", action="store_true", help="Do not push; only log pending notifications.")
+    parser.add_argument(
+        "--dry-run-out",
+        default="",
+        help="When used with --run --dry-run, write Bark message previews to this file (JSON).",
+    )
     parser.add_argument("--course-query", default="", help="Substring to match the target course in portal list.")
     parser.add_argument("--course-limit", type=int, default=0, help="Limit courses fetched for --fetch-all (0 = no limit).")
     parser.add_argument("--limit", type=int, default=0, help="Limit pushes for --run (0 = use POLL_LIMIT_PER_RUN).")
@@ -90,6 +96,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.dry_run and not args.run:
         logger.error("--dry-run must be used with --run")
+        return 2
+    if args.dry_run_out and not (args.run and args.dry_run):
+        logger.error("--dry-run-out must be used with --run --dry-run")
         return 2
 
     if args.parse_announcements_html:
@@ -252,6 +261,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.run:
         from app.store import ack_state, fetch_records, mark_notified, upsert_seen
 
+        login = asyncio.run(
+            ensure_login(
+                state_path=config.bb_state_path,
+                login_url=config.bb_login_url or config.bb_base_url,
+                verify_url=config.bb_courses_url or config.bb_base_url,
+                headless=config.headless,
+                username=config.bb_username,
+                password=config.bb_password,
+            )
+        )
+        if not login.ok:
+            logger.error("login not ok: %s", login.note or login.final_url)
+            return 2
+
         result = asyncio.run(
             fetch_all_items(
                 state_path=config.bb_state_path,
@@ -307,17 +330,21 @@ def main(argv: list[str] | None = None) -> int:
 
         endpoint = (config.bark_endpoint or "").strip()
         sent_pairs: list[tuple[str, str]] = []
+        preview_out = Path(args.dry_run_out) if args.dry_run_out else (root / "data" / "bark_dry_run.json")
 
         logger.info("run summary: items=%d pending=%d limit=%d", len(items), len(pending), limit)
         if not endpoint:
             logger.warning("BARK_ENDPOINT is empty; will not push (use --dry-run to silence this).")
 
+        previews: list[dict] = []
         for _, fp, state_fp, msg in to_send:
             # msg is BarkMessage, but keep runtime decoupled.
             title = getattr(msg, "title", "")
             body = getattr(msg, "body", "")
             url = getattr(msg, "url", "")
             logger.info("push planned: %s | %s", title, body.splitlines()[0] if body else "")
+            if args.dry_run:
+                previews.append({"fp": fp, "state_fp": state_fp, "title": title, "body": body, "url": url})
             if args.dry_run or not endpoint:
                 continue
             try:
@@ -325,6 +352,17 @@ def main(argv: list[str] | None = None) -> int:
                 sent_pairs.append((fp, state_fp))
             except Exception as e:
                 logger.error("bark push failed (%s): %s", type(e).__name__, str(e)[:120])
+
+        if args.dry_run:
+            preview_out.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "items_total": len(items),
+                "pending_total": len(pending),
+                "limit": limit,
+                "messages": previews,
+            }
+            preview_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logger.info("wrote dry-run bark preview: %s", preview_out)
 
         if sent_pairs and not args.dry_run and endpoint:
             mark_notified(config.db_path, sent_pairs)

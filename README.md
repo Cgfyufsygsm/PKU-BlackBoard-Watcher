@@ -49,7 +49,7 @@
 
 Assignments 当前实现分两层：
 - 列表页（课程作业 / 教学内容里的作业条目）字段：`course_id`、`course_name`、`title`、`content_item_id`、`url`、`is_online_submission`、`submission_url`（以及 `origin` 可选）
-- 详情页（uploadAssignment）可解析字段：`due_at_raw`（到期日期）、`points_possible`（满分）、`grade_raw`（成绩；未出分时常为 `-`）
+- 详情页（uploadAssignment）可解析字段：`due_at_raw`（到期日期）、`points_possible`（满分）、`grade_raw`（成绩；未出分时常为 `-`）、`submitted`（是否已提交）、`submitted_at_raw`（提交时间，若可读到）
 - 已提交作业：页面可能是评分/查看模式；可通过“开始新的”（`action=newAttempt`）进入新提交界面以抓取统一的“作业信息”字段（到期日期/满分）
 
 4. 个人成绩（Grades）
@@ -91,6 +91,20 @@ Assignments 当前实现分两层：
 - 完整 URL：`https://api.day.app/<token>`
 - 只填 token：`<token>`（程序会自动补全为 `https://api.day.app/<token>`）
 
+当前推送不会附带可点击超链接（不设置 Bark 的 `url` 参数）。
+
+推送里展示给人的时间会做一次格式化（示例：`2025-10-18T23:59:59+08:00` → `2025年10月18日 23:59:59`）；内部仍保留 ISO 时间用于去重/比较。
+
+## 云端/无人值守登录（自动刷新登录态）
+
+默认我们复用 `data/storage_state.json`。如果登录态过期，`--run` 会优先尝试用账号密码自动刷新登录态（适用于你的统一认证不需要验证码/2FA的情况）。
+
+- 在 `.env` 配置：
+  - `BB_USERNAME` / `BB_PASSWORD`
+- 行为：
+  - `--run` 启动时先校验登录态；若失效则自动打开 `BB_LOGIN_URL`，尝试提交账号密码并访问 `BB_COURSES_URL` 验证成功，然后重写 `BB_STATE_PATH`
+  - 若自动登录失败，会退出并在日志里给出原因（不会打印密码）
+
 ## 生成登录态（第一次需要）
 
 - `python scripts/export_state.py`
@@ -110,6 +124,7 @@ Assignments 当前实现分两层：
 - 跑一轮“抓取 → 去重（基于 fp/state_fp）→ Bark 推送”（Step E，建议先 dry-run）：`python -m app.main --run --dry-run`
   - 限制只抓前 N 门课：`python -m app.main --run --dry-run --course-limit 1`
   - 限制单次最多推送 N 条：`python -m app.main --run --limit 5`
+  - dry-run 预览写入文件（不发到手机）：`python -m app.main --run --dry-run --dry-run-out data/bark_preview.json`
 - 抓取某门课“课程通知”的 debug HTML：`python -m app.main --debug-announcements --course-query "信息学中的概率统计"`
   - Debug 文件：`data/debug_course_entry.html`、`data/debug_announcements.html`
   - 同时会在日志里输出解析到的公告数量与前 10 条（发布时间/标题/URL）
