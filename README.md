@@ -48,7 +48,7 @@
 
 **系统要求：**
 - Python 3.10+
-- Linux / WSL / macOS
+- Linux / WSL / macOS。推荐部署在 CLAB 上。
 
 **推荐使用 Conda 环境：**
 
@@ -78,16 +78,9 @@ python -m playwright install-deps chromium  # 可能需要 sudo
    cp .env.example .env
    ```
 
-2. 编辑 `.env`，至少填写以下必填项：
+2. 编辑 `.env`：
    ```env
-   BB_BASE_URL=https://course.pku.edu.cn
-   BB_LOGIN_URL=<登录入口URL>
-   BB_COURSES_URL=<课程列表URL>
-   BARK_ENDPOINT=<你的Bark Token或完整URL>
-   ```
-
-3. （可选）配置自动登录：
-   ```env
+   BARK_ENDPOINT=<你的Bark Token>
    BB_USERNAME=<学号>
    BB_PASSWORD=<密码>
    ```
@@ -122,7 +115,9 @@ python -m app.main --run --limit 100
 
 ## 配置说明
 
-### 必填配置
+### 默认配置
+
+一般情况下无需修改。
 
 | 配置项 | 说明 | 示例 |
 |--------|------|------|
@@ -140,7 +135,9 @@ python -m app.main --run --limit 100
 > 
 > 如需邮件通知支持，欢迎提 PR！
 
-### 自动登录配置（可选）
+### 自动登录配置
+
+如果不填写的话可能需要时不时手动更新登录态了。
 
 | 配置项 | 说明 |
 |--------|------|
