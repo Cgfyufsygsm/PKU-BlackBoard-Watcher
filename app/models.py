@@ -71,6 +71,8 @@ class Item:
             state["content"] = raw.get("content", "")
         elif source == "assignment":
             state["is_online_submission"] = bool(raw.get("is_online_submission", False))
+            state["submitted"] = raw.get("submitted", None)
+            state["submitted_at_raw"] = raw.get("submitted_at_raw", "")
             state["grade_raw"] = raw.get("grade_raw", "")
             state["points_possible_raw"] = raw.get("points_possible_raw", "")
         elif source == "grade_item":

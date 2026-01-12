@@ -5,13 +5,42 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.bb.announcements import parse_announcements_html
-from app.bb.assignments import parse_assignments_html
+from app.bb.assignments import extract_new_attempt_url, parse_assignment_info_html, parse_assignments_html
 from app.bb.courses import Course, eval_courses_on_portal_page
 from app.bb.grades import parse_grades_html
 from app.bb.teaching_content import parse_teaching_content_html
 from app.models import Item
 
 logger = logging.getLogger(__name__)
+
+async def _safe_goto(*, page, url: str, timeout_ms: int, wait_until: str = "domcontentloaded", retries: int = 3) -> None:
+    import asyncio
+
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            await page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+            return
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            msg = str(e)
+            transient = any(
+                tok in msg
+                for tok in (
+                    "ERR_NETWORK_CHANGED",
+                    "ERR_CONNECTION_RESET",
+                    "ERR_INTERNET_DISCONNECTED",
+                    "ERR_NAME_NOT_RESOLVED",
+                    "ERR_CONNECTION_TIMED_OUT",
+                )
+            )
+            if transient and attempt < retries:
+                logger.warning("goto transient failure (%d/%d): %s", attempt, retries, msg.splitlines()[0][:200])
+                await asyncio.sleep(0.4 * attempt)
+                continue
+            raise
+    if last_err:
+        raise last_err
 
 
 def _as_item(d: dict) -> Item:
@@ -100,7 +129,7 @@ async def fetch_all_items(
         context = await browser.new_context(storage_state=str(state_path))
         page = await context.new_page()
         try:
-            await page.goto(portal_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            await _safe_goto(page=page, url=portal_url, wait_until="domcontentloaded", timeout_ms=timeout_ms, retries=3)
             courses = await eval_courses_on_portal_page(page=page)
             if course_limit and course_limit > 0:
                 courses = courses[:course_limit]
@@ -112,7 +141,7 @@ async def fetch_all_items(
             for course in courses:
                 course_url = urljoin(portal_url, course.url)
                 try:
-                    await page.goto(course_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    await _safe_goto(page=page, url=course_url, wait_until="domcontentloaded", timeout_ms=timeout_ms, retries=3)
                     await page.wait_for_timeout(300)
                     course_entry_url = page.url
                     entry_html = await page.content()
@@ -137,7 +166,7 @@ async def fetch_all_items(
                     if teaching_href:
                         try:
                             teaching_url = urljoin(course_entry_url, teaching_href)
-                            await page.goto(teaching_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                            await _safe_goto(page=page, url=teaching_url, wait_until="domcontentloaded", timeout_ms=timeout_ms, retries=3)
                             await page.wait_for_timeout(300)
                             teaching_html = await page.content()
                             tc = parse_teaching_content_html(
@@ -174,7 +203,7 @@ async def fetch_all_items(
                     if assignments_href:
                         try:
                             assignments_url = urljoin(course_entry_url, assignments_href)
-                            await page.goto(assignments_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                            await _safe_goto(page=page, url=assignments_url, wait_until="domcontentloaded", timeout_ms=timeout_ms, retries=3)
                             await page.wait_for_timeout(300)
                             assignments_html = await page.content()
                             ass = parse_assignments_html(
@@ -184,6 +213,69 @@ async def fetch_all_items(
                                 course_id=course.course_id,
                                 course_name=course.name,
                             )
+                            # The list page usually has no due date; for online-submission assignments,
+                            # we can open the detail page to extract "到期日期/满分/成绩" for better notifications.
+                            for a in ass:
+                                if not a.get("is_online_submission", False):
+                                    continue
+                                if a.get("due_at_raw") or a.get("due_at"):
+                                    continue
+                                detail_url = (a.get("submission_url") or a.get("url") or "").strip()
+                                if not detail_url or "/webapps/assignment/uploadAssignment" not in detail_url:
+                                    continue
+                                try:
+                                    await _safe_goto(page=page, url=detail_url, wait_until="domcontentloaded", timeout_ms=timeout_ms, retries=3)
+                                    await page.wait_for_timeout(250)
+                                    detail_html = await page.content()
+                                    info = parse_assignment_info_html(html=detail_html)
+
+                                    # Submitted assignments may land on a grading/history view that doesn't contain
+                                    # the unified "作业信息" meta block; in that case, follow "开始新的" (newAttempt).
+                                    if not info.get("due_at_raw") or not info.get("points_possible_raw"):
+                                        new_attempt_url = extract_new_attempt_url(html=detail_html, base_url=page.url)
+                                        if new_attempt_url:
+                                            await _safe_goto(
+                                                page=page,
+                                                url=new_attempt_url,
+                                                wait_until="domcontentloaded",
+                                                timeout_ms=timeout_ms,
+                                                retries=3,
+                                            )
+                                            await page.wait_for_timeout(250)
+                                            info2 = parse_assignment_info_html(html=await page.content())
+                                            # Prefer values from the new-attempt view when present.
+                                            for k, v in info2.items():
+                                                # Keep submission status from the original detail view; newAttempt
+                                                # is a fresh submission form and would look "unsubmitted".
+                                                if k in {"submitted", "submitted_at_raw", "submitted_evidence"}:
+                                                    continue
+                                                if v not in (None, ""):
+                                                    info[k] = v
+                                    # Only write back fields we know how to parse.
+                                    for k in (
+                                        "due_at_raw",
+                                        "points_possible_raw",
+                                        "points_possible",
+                                        "grade_raw",
+                                        "grade",
+                                        "attempt_grade_raw",
+                                        "attempt_grade",
+                                        "submitted",
+                                        "submitted_at_raw",
+                                        "submitted_evidence",
+                                    ):
+                                        if k in info and info.get(k) not in (None, ""):
+                                            a[k] = info.get(k)
+                                except Exception as e:
+                                    errors.append(
+                                        {
+                                            "kind": "exception",
+                                            "course_id": course.course_id,
+                                            "course_name": course.name,
+                                            "board": "assignments_detail",
+                                            "error": repr(e),
+                                        }
+                                    )
                             all_items.extend(_as_item(d) for d in ass)
                         except Exception as e:
                             errors.append(
@@ -205,7 +297,7 @@ async def fetch_all_items(
                     if grades_href:
                         try:
                             grades_url = urljoin(course_entry_url, grades_href)
-                            await page.goto(grades_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                            await _safe_goto(page=page, url=grades_url, wait_until="domcontentloaded", timeout_ms=timeout_ms, retries=3)
                             await page.wait_for_timeout(300)
                             grades_html = await page.content()
                             gi = parse_grades_html(

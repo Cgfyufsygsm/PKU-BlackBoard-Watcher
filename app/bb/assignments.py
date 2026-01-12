@@ -83,6 +83,31 @@ def parse_assignment_info_html(*, html: str) -> dict:
             except Exception:
                 return None
 
+    def parse_submitted_status() -> tuple[bool | None, str, str]:
+        """
+        Returns (submitted, submitted_at_raw, evidence).
+        submitted:
+          - True: page shows an existing attempt/submission
+          - False: page shows the submission form (not yet submitted)
+          - None: cannot decide
+        """
+        # Submitted/history/grading view usually contains currentAttempt submission block.
+        if re.search(r'<div[^>]*id="currentAttempt"\\b', html, flags=re.I) or re.search(
+            r'id="currentAttempt_submissionList"', html, flags=re.I
+        ):
+            submitted_at = first_group(r'class="subHeader\s+dateStamp\s*"[^>]*>\s*([^<]+)\s*</span>', html)
+            return True, text_from(html_mod.unescape(submitted_at)), "currentAttempt"
+
+        # Unsubmitted/newAttempt view contains uploadAssignmentForm with action=submit and a "提交" button.
+        if re.search(r'<form[^>]+name="uploadAssignmentForm"[^>]*action="[^"]*uploadAssignment\\?action=submit', html, flags=re.I):
+            return False, "", "uploadAssignmentForm"
+        if re.search(r'<input[^>]+value="提交"[^>]*>', html, flags=re.I):
+            return False, "", "submit_button"
+
+        return None, "", ""
+
+    submitted, submitted_at_raw, submitted_evidence = parse_submitted_status()
+
     return {
         "due_at_raw": due_at_raw,
         "points_possible_raw": points_possible_raw,
@@ -91,6 +116,9 @@ def parse_assignment_info_html(*, html: str) -> dict:
         "grade": to_number(grade_raw),
         "attempt_grade_raw": attempt_grade_raw.strip() if attempt_grade_raw is not None else "",
         "attempt_grade": to_number(attempt_grade_raw),
+        "submitted": submitted,
+        "submitted_at_raw": submitted_at_raw,
+        "submitted_evidence": submitted_evidence,
     }
 
 
