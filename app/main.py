@@ -9,9 +9,12 @@ from pathlib import Path
 from app.bb import (
     check_login,
     debug_dump_course_announcements,
+    debug_dump_assignment_samples,
+    debug_dump_assignments,
     debug_dump_teaching_content,
     fetch_courses_from_portal,
     parse_announcements_html,
+    parse_assignments_html,
     parse_teaching_content_html,
 )
 from app.config import load_config
@@ -32,11 +35,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-courses", action="store_true", help="Dump portal HTML and extract student courses.")
     parser.add_argument("--debug-announcements", action="store_true", help="Dump HTML for one course announcements page.")
     parser.add_argument("--debug-teaching-content", action="store_true", help='Dump HTML for one course "教学内容" page.')
+    parser.add_argument("--debug-assignments", action="store_true", help='Dump HTML for one course "课程作业" page.')
+    parser.add_argument(
+        "--debug-assignment-samples",
+        action="store_true",
+        help='Dump two assignment detail HTML pages (submitted/unsubmitted samples) for one course.',
+    )
     parser.add_argument("--course-query", default="", help="Substring to match the target course in portal list.")
+    parser.add_argument("--submitted-assignment-query", default="", help="Substring to match the submitted assignment title.")
+    parser.add_argument("--unsubmitted-assignment-query", default="", help="Substring to match the unsubmitted assignment title.")
     parser.add_argument("--parse-announcements-html", default="", help="Parse a saved announcements HTML file (offline).")
     parser.add_argument("--parse-teaching-content-html", default="", help='Parse a saved "教学内容" HTML file (offline).')
+    parser.add_argument("--parse-assignments-html", default="", help='Parse a saved "课程作业" HTML file (offline).')
     parser.add_argument("--announcements-json", default="", help="Write parsed announcements to a JSON file.")
     parser.add_argument("--teaching-content-json", default="", help='Write parsed "教学内容" items to a JSON file.')
+    parser.add_argument("--assignments-json", default="", help='Write parsed "课程作业" items to a JSON file.')
     args = parser.parse_args(argv)
 
     root = _project_root()
@@ -52,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.teaching_content_json and not (args.parse_teaching_content_html or args.debug_teaching_content):
         logger.error("--teaching-content-json must be used with --parse-teaching-content-html or --debug-teaching-content")
+        return 2
+    if args.assignments_json and not (args.parse_assignments_html or args.debug_assignments):
+        logger.error("--assignments-json must be used with --parse-assignments-html or --debug-assignments")
         return 2
 
     if args.parse_announcements_html:
@@ -86,10 +102,38 @@ def main(argv: list[str] | None = None) -> int:
             out_path.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             logger.info("wrote teaching content json: %s", out_path)
         for it in items[:10]:
+            if it.get("source") == "assignment":
+                logger.info(
+                    "assignment(in content): online=%s | %s | %s",
+                    it.get("is_online_submission", False),
+                    it.get("title", ""),
+                    it.get("url", ""),
+                )
+            else:
+                logger.info(
+                    "teaching_content: %s | attachments=%s | %s",
+                    it.get("title", ""),
+                    it.get("has_attachments", False),
+                    it.get("url", ""),
+                )
+        logger.info("done")
+        return 0
+
+    if args.parse_assignments_html:
+        html_path = Path(args.parse_assignments_html)
+        html = html_path.read_text(encoding="utf-8")
+        items = parse_assignments_html(html=html, base_url=config.bb_base_url)
+        logger.info('parsed assignments from %s: %d', html_path, len(items))
+        if args.assignments_json:
+            out_path = Path(args.assignments_json)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logger.info("wrote assignments json: %s", out_path)
+        for it in items[:15]:
             logger.info(
-                "teaching_content: %s | attachments=%s | %s",
+                "assignment: online=%s | %s | %s",
+                it.get("is_online_submission", False),
                 it.get("title", ""),
-                it.get("has_attachments", False),
                 it.get("url", ""),
             )
         logger.info("done")
@@ -182,12 +226,98 @@ def main(argv: list[str] | None = None) -> int:
             out_path.write_text(json.dumps(result.items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             logger.info("wrote teaching content json: %s", out_path)
         for it in result.items[:10]:
+            if it.get("source") == "assignment":
+                logger.info(
+                    "assignment(in content): online=%s | %s | %s",
+                    it.get("is_online_submission", False),
+                    it.get("title", ""),
+                    it.get("url", ""),
+                )
+            else:
+                logger.info(
+                    "teaching_content: %s | attachments=%s | %s",
+                    it.get("title", ""),
+                    it.get("has_attachments", False),
+                    it.get("url", ""),
+                )
+
+    if args.debug_assignments:
+        if not args.course_query:
+            logger.error("--course-query is required for --debug-assignments")
+            return 2
+        result = asyncio.run(
+            debug_dump_assignments(
+                state_path=config.bb_state_path,
+                portal_url=config.bb_courses_url or config.bb_base_url,
+                course_query=args.course_query,
+                headless=config.headless,
+                portal_html_path=root / "data" / "debug_courses.html",
+                course_entry_html_path=root / "data" / "debug_course_entry.html",
+                assignments_html_path=root / "data" / "debug_assignments.html",
+            )
+        )
+        logger.info("debug assignments ok: %s (course_id=%s)", result.course.name, result.course.course_id)
+        logger.info("course_entry_url: %s", result.course_entry_url)
+        logger.info("assignments_url: %s", result.assignments_url)
+        logger.info("assignments found: %d", len(result.items))
+        if args.assignments_json:
+            out_path = Path(args.assignments_json)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(result.items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logger.info("wrote assignments json: %s", out_path)
+        for it in result.items[:15]:
             logger.info(
-                "teaching_content: %s | attachments=%s | %s",
+                "assignment: online=%s | %s | %s",
+                it.get("is_online_submission", False),
                 it.get("title", ""),
-                it.get("has_attachments", False),
                 it.get("url", ""),
             )
+
+    if args.debug_assignment_samples:
+        if not args.course_query:
+            logger.error("--course-query is required for --debug-assignment-samples")
+            return 2
+        if not args.submitted_assignment_query or not args.unsubmitted_assignment_query:
+            logger.error("--submitted-assignment-query and --unsubmitted-assignment-query are required for --debug-assignment-samples")
+            return 2
+        result = asyncio.run(
+            debug_dump_assignment_samples(
+                state_path=config.bb_state_path,
+                portal_url=config.bb_courses_url or config.bb_base_url,
+                course_query=args.course_query,
+                submitted_assignment_query=args.submitted_assignment_query,
+                unsubmitted_assignment_query=args.unsubmitted_assignment_query,
+                headless=config.headless,
+                assignments_html_path=root / "data" / "debug_assignments.html",
+                submitted_html_path=root / "data" / "debug_assignment_submitted.html",
+                submitted_new_attempt_html_path=root / "data" / "debug_assignment_submitted_new_attempt.html",
+                unsubmitted_html_path=root / "data" / "debug_assignment_unsubmitted.html",
+            )
+        )
+        logger.info("assignment samples ok: %s (course_id=%s)", result.course.name, result.course.course_id)
+        logger.info("assignments_url: %s", result.assignments_url)
+        logger.info("submitted sample: %s | %s | %s", result.submitted_title, result.submitted_url, result.submitted_html_path)
+        logger.info(
+            "submitted info: due=%s points=%s grade=%s",
+            result.submitted_info.get("due_at_raw", ""),
+            result.submitted_info.get("points_possible_raw", ""),
+            result.submitted_info.get("grade_raw", ""),
+        )
+        if result.submitted_new_attempt_url:
+            logger.info("submitted new-attempt url: %s", result.submitted_new_attempt_url)
+            logger.info(
+                "submitted new-attempt info: due=%s points=%s grade=%s (html=%s)",
+                result.submitted_new_attempt_info.get("due_at_raw", ""),
+                result.submitted_new_attempt_info.get("points_possible_raw", ""),
+                result.submitted_new_attempt_info.get("grade_raw", ""),
+                result.submitted_new_attempt_html_path,
+            )
+        logger.info("unsubmitted sample: %s | %s | %s", result.unsubmitted_title, result.unsubmitted_url, result.unsubmitted_html_path)
+        logger.info(
+            "unsubmitted info: due=%s points=%s",
+            result.unsubmitted_info.get("due_at_raw", ""),
+            result.unsubmitted_info.get("points_possible_raw", ""),
+        )
 
     logger.info("done")
     return 0

@@ -174,5 +174,26 @@ async def eval_courses_on_portal_page(*, page) -> list[Course]:
         )
         for x in courses_raw
     ]
-    return [c for c in courses if c.name and c.url]
+    courses = [c for c in courses if c.name and c.url]
+    if courses:
+        return courses
 
+    url = (getattr(page, "url", "") or "").lower()
+    if any(tok in url for tok in ("bb-sso", "login", "sso", "captcha")):
+        raise RuntimeError(
+            "Portal page looks like a login page; storage_state may be expired. "
+            "Re-run `python scripts/export_state.py` to refresh `data/storage_state.json`."
+        )
+
+    # Fall back to a lightweight HTML check to produce a better error message.
+    try:
+        html = await page.content()
+    except Exception:
+        return courses
+    if "id=\"login\"" in html or "/webapps/bb-sso" in html:
+        raise RuntimeError(
+            "Portal HTML looks like a login page; storage_state may be expired. "
+            "Re-run `python scripts/export_state.py` to refresh `data/storage_state.json`."
+        )
+
+    return courses

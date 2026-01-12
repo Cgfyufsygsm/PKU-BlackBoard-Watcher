@@ -80,6 +80,32 @@ def parse_teaching_content_html(
 
         has_attachments = bool(re.search(r"/bbcswebdav/|/webapps/blackboard/execute/content/file\\?", li_html))
 
+        submission_href = (
+            first_group(r'<a[^>]*href="([^"]*/webapps/assignment/uploadAssignment[^"]*)"', li_html)
+            or first_group(r"this\\.href='([^']*/webapps/assignment/uploadAssignment[^']*)'", li_html)
+            or first_group(r'this\\.href=\"([^\"]*/webapps/assignment/uploadAssignment[^\"]*)\"', li_html)
+        )
+        submission_url = ""
+        if submission_href:
+            submission_url = urljoin(page_url or base_url or "", html_mod.unescape(submission_href).replace("&amp;", "&"))
+
+        # Some courses put submit-able assignments under “教学内容”.
+        if submission_url or "/webapps/assignment/uploadAssignment" in url:
+            items.append(
+                {
+                    "source": "assignment",
+                    "origin": "teaching_content",
+                    "course_id": course_id,
+                    "course_name": course_name,
+                    "content_item_id": content_item_id,
+                    "title": title,
+                    "url": submission_url or url,
+                    "is_online_submission": True,
+                    "submission_url": submission_url,
+                }
+            )
+            continue
+
         items.append(
             {
                 "source": "teaching_content",

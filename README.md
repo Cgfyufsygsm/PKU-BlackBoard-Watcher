@@ -33,7 +33,7 @@
    - 发布时间：不记录（页面通常无明确发布时间）
    - 附件：只需要标记“是否有附件”（必要时可补充附件数量/文件名）
    - 详情 URL
-   - TODO：有些老师会在这个板块下面布置作业（我也不理解为什么），比如自然语言处理。到时候需要特殊解析。
+   - 注意：有些老师会在这个板块下面布置“可在线提交的作业”（例如自然语言处理）。当条目链接指向 `/webapps/assignment/uploadAssignment` 时，会被当作 `assignment` 处理（`origin=teaching_content`）。
 
 3. 课程作业（Assignments）
    - 课程作业的页面和教学内容没有本质区别，都是 listContent.jsp 列出来的。所以解析方式可以参考课程内容。但是需要注意的是，我们需要重点解析**可提交的作业**，点进去可以看得到作业到期日期以及分数（如果还没有提交）。
@@ -42,7 +42,13 @@
    - 发布时间（若页面可读到）
    - 截止时间（Due）
    - 是否已提交（Submitted: yes/no/unknown）
+   - 是否可在线提交（通过 URL 是否为 `/webapps/assignment/uploadAssignment` 判断）
    - 详情 URL
+
+Assignments 当前实现分两层：
+- 列表页（课程作业 / 教学内容里的作业条目）字段：`course_id`、`course_name`、`title`、`content_item_id`、`url`、`is_online_submission`、`submission_url`（以及 `origin` 可选）
+- 详情页（uploadAssignment）可解析字段：`due_at_raw`（到期日期）、`points_possible`（满分）、`grade_raw`（成绩；未出分时常为 `-`）
+- 已提交作业：页面可能是评分/查看模式；可通过“开始新的”（`action=newAttempt`）进入新提交界面以抓取统一的“作业信息”字段（到期日期/满分）
 
 4. 个人成绩（Grades）
   - 评分项标题（例如作业/测验/期中等）
@@ -98,6 +104,12 @@
 - 抓取某门课“教学内容”的 debug HTML：`python -m app.main --debug-teaching-content --course-query "信息学中的概率统计" --teaching-content-json data/teaching_content.json`
   - Debug 文件：`data/debug_teaching_content.html`
 - 离线解析已保存的“教学内容”HTML：`python -m app.main --parse-teaching-content-html data/debug_teaching_content.html --teaching-content-json data/teaching_content.json`
+- 抓取某门课“课程作业”的 debug HTML + 判定可在线提交：`python -m app.main --debug-assignments --course-query "信息学中的概率统计" --assignments-json data/assignments.json`
+  - Debug 文件：`data/debug_assignments.html`
+- 离线解析已保存的“课程作业”HTML：`python -m app.main --parse-assignments-html data/debug_assignments.html --assignments-json data/assignments.json`
+- 抓取“已提交/未提交”作业详情页样板：`python -m app.main --debug-assignment-samples --course-query "信息科学中的物理学（上）" --submitted-assignment-query "第十一次作业" --unsubmitted-assignment-query "第十二次作业"`
+  - 输出：`data/debug_assignment_submitted.html`、`data/debug_assignment_submitted_new_attempt.html`、`data/debug_assignment_unsubmitted.html`
+  - 同时会在日志里输出两份样板的“到期日期/满分”（已提交样板会优先用“开始新的”后的页面解析）
 
 ## 产物位置
 
