@@ -13,6 +13,7 @@ from app.bb import (
     debug_dump_assignments,
     debug_dump_grades,
     debug_dump_teaching_content,
+    fetch_all_items,
     fetch_courses_from_portal,
     parse_announcements_html,
     parse_assignments_html,
@@ -44,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
         help='Dump two assignment detail HTML pages (submitted/unsubmitted samples) for one course.',
     )
     parser.add_argument("--debug-grades", action="store_true", help='Dump HTML for one course "个人成绩" page.')
+    parser.add_argument("--fetch-all", action="store_true", help="Fetch all courses and all boards into unified Items.")
     parser.add_argument("--course-query", default="", help="Substring to match the target course in portal list.")
+    parser.add_argument("--course-limit", type=int, default=0, help="Limit courses fetched for --fetch-all (0 = no limit).")
     parser.add_argument("--submitted-assignment-query", default="", help="Substring to match the submitted assignment title.")
     parser.add_argument("--unsubmitted-assignment-query", default="", help="Substring to match the unsubmitted assignment title.")
     parser.add_argument("--parse-announcements-html", default="", help="Parse a saved announcements HTML file (offline).")
@@ -55,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--assignments-json", default="", help='Write parsed "课程作业" items to a JSON file.')
     parser.add_argument("--parse-grades-html", default="", help='Parse a saved "个人成绩" HTML file (offline).')
     parser.add_argument("--grades-json", default="", help='Write parsed "个人成绩" items to a JSON file.')
+    parser.add_argument("--items-json", default="", help="Write unified Items to a JSON file (for --fetch-all).")
     args = parser.parse_args(argv)
 
     root = _project_root()
@@ -76,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.grades_json and not (args.parse_grades_html or args.debug_grades):
         logger.error("--grades-json must be used with --parse-grades-html or --debug-grades")
+        return 2
+    if args.items_json and not args.fetch_all:
+        logger.error("--items-json must be used with --fetch-all")
         return 2
 
     if args.parse_announcements_html:
@@ -197,6 +204,43 @@ def main(argv: list[str] | None = None) -> int:
         for c in courses[:30]:
             extra = f" (course_id={c.course_id})" if getattr(c, "course_id", "") else ""
             logger.info("course: %s%s | %s", c.name, extra, c.url)
+
+    if args.fetch_all:
+        result = asyncio.run(
+            fetch_all_items(
+                state_path=config.bb_state_path,
+                portal_url=config.bb_courses_url or config.bb_base_url,
+                headless=config.headless,
+                course_limit=args.course_limit,
+            )
+        )
+        logger.info("fetch-all courses: %d", len(result.courses))
+        logger.info("fetch-all items: %d", len(result.items))
+        if result.errors:
+            hard = [e for e in result.errors if e.get("kind") != "missing_menu"]
+            skipped = [e for e in result.errors if e.get("kind") == "missing_menu"]
+            if skipped:
+                logger.info("fetch-all skipped boards (menu missing): %d", len(skipped))
+            if hard:
+                logger.warning("fetch-all errors: %d", len(hard))
+                for e in hard[:20]:
+                    logger.warning(
+                        "fetch-all error: course=%s (%s) board=%s err=%s",
+                        e.get("course_name", ""),
+                        e.get("course_id", ""),
+                        e.get("board", ""),
+                        e.get("error", ""),
+                    )
+        if args.items_json:
+            out_path = Path(args.items_json)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps([it.to_dict() for it in result.items], ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            logger.info("wrote items json: %s", out_path)
+        logger.info("done")
+        return 0
 
     if args.debug_announcements:
         if not args.course_query:

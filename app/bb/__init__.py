@@ -9,6 +9,7 @@ from app.bb.assignments import (
     parse_assignments_html,
 )
 from app.bb.courses import Course, fetch_courses_from_portal
+from app.bb.fetch_all import FetchAllResult, fetch_all_items
 from app.bb.grades import DebugGradesResult, debug_dump_grades, parse_grades_html
 from app.bb.login import LoginCheckResult, check_login
 from app.bb.state import export_storage_state
@@ -21,6 +22,7 @@ __all__ = [
     "DebugAssignmentsResult",
     "DebugGradesResult",
     "DebugTeachingContentResult",
+    "FetchAllResult",
     "LoginCheckResult",
     "check_login",
     "debug_dump_course_announcements",
@@ -29,6 +31,7 @@ __all__ = [
     "debug_dump_grades",
     "debug_dump_teaching_content",
     "export_storage_state",
+    "fetch_all_items",
     "fetch_courses_from_portal",
     "parse_announcements_html",
     "parse_assignments_html",

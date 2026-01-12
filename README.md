@@ -10,6 +10,8 @@
 - Step D：按“四个板块”逐个实现抓取与离线解析（先导出 debug HTML，再定 selector），并可导出 JSON 供人工核对
 - 代码结构：`app/bb/` 已按登录/课程/通知/教学内容/作业/成绩拆分模块，便于继续扩展与维护
 
+更详细的里程碑与下一步拆解见：`PLAN.md`。
+
 ## 下一步（准备做）
 
 - Step E：SQLite 去重 + 推送闭环（新内容只推一次）
@@ -97,6 +99,10 @@ Assignments 当前实现分两层：
 - 校验登录态：`python -m app.main --check-login`
 - 保存 portal HTML + 抓“学生”课程列表：`python -m app.main --list-courses`
   - Debug 文件：`data/debug_courses.html`
+- 全量抓取“四个板块”（所有课程）并导出统一 Item JSON：`python -m app.main --fetch-all --items-json data/items.json`
+  - 每条 item 都会包含：
+    - `fp`：稳定身份 key（用于 DB 一行对应一个评分项/公告/条目；优先 `course_id + source + external_id`，否则用 `url`）
+    - `state_fp`：状态 hash（用于检测同一身份条目的变化，例如“未评分 → 出分”）
 - 抓取某门课“课程通知”的 debug HTML：`python -m app.main --debug-announcements --course-query "信息学中的概率统计"`
   - Debug 文件：`data/debug_course_entry.html`、`data/debug_announcements.html`
   - 同时会在日志里输出解析到的公告数量与前 10 条（发布时间/标题/URL）
