@@ -116,8 +116,10 @@
 
 - 目标：cron 环境下一条命令就能跑通。
 - 实现点：
-  - `check.sh` 从 `--check-login` 切到 `--run`
-  - conda 环境建议使用非交互方式（例如 `conda run -n bbwatcher python -m app.main --run`），避免 `conda activate` 在 cron 里不生效
+  - `check.sh` 已切到完整闭环：`--run --limit 100`
+  - 默认优先使用非交互方式：`conda run -n bbwatcher python -m app.main --run`（可用 `CONDA_ENV_NAME` 覆盖）
+  - 使用 `flock` + `data/cron.lock` 避免 cron 并发重叠
+  - crontab 建议：`*/20 * * * * /bin/bash /ABS/PATH/PKU-BlackBoard-Watcher/check.sh`
 
 ## Step F：稳定性与可维护性（后续）
 
