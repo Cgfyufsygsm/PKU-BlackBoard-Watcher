@@ -88,6 +88,14 @@
     - title：`[课程名] <标题>`
     - body：追加 `ts/due/grade` 的可读摘要（按 source 选择性拼）
 
+当前实现的通知类型（`app/notify.py`）：
+- 新通知：`[课程] 新通知`，包含发布时间/发帖者/内容摘要
+- 新教学内容：`[课程] 新教学内容`，包含附件是否存在/内容摘要
+- 新作业：`[课程] 新作业`，包含是否在线提交（作业到期/满分/出分更多信息会优先通过成绩页的作业评分项体现）
+- 新成绩项：`[课程] 新成绩项`，包含类别/成绩/到期/时间
+- 作业出分 / 作业成绩变动：由“成绩页”里 `category=作业` 的 `grade_item` 变化触发
+- 成绩出分 / 成绩变动：由其它 `grade_item` 的 `grade_raw` 变化触发
+
 ### E6. main.py 主流程与 CLI
 
 - 目标：提供一个稳定的“跑一轮”命令，支持 dry-run、限流与可观测 summary。
@@ -96,6 +104,11 @@
   - `--dry-run`：只抓取/去重/打印，不写 sent（可选：也不写入新条目）
   - `--limit`（或继续用 `POLL_LIMIT_PER_RUN`）：控制单次最多推送条数
 - 需要输出 summary：总抓取数、新数、推送数、耗时
+
+当前实现（`app/main.py`）：
+- `--run` 会对比 DB 中 `sent_state_fp` 与本轮 `state_fp` 来决定是否需要推送，推送成功后写入 `sent_at/sent_state_fp`，避免重复推送同一状态
+- 对 `grade_item/assignment`：状态变化会产生“更新”通知（尽量覆盖满分/截止/成绩/状态等变化）
+- 对 `announcement/teaching_content`：默认只推“新条目”；如果老师编辑旧条目导致 `state_fp` 改变，会自动 ack 掉避免反复 pending
 
 ### E7. check.sh / cron 入口
 

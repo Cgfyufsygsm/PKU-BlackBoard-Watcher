@@ -22,6 +22,7 @@ from app.bb import (
 )
 from app.config import load_config
 from app.logging_utils import setup_logging
+from app.notify import message_for_new_item, message_for_updated_item, send_bark
 from app.store import init_db
 
 
@@ -46,8 +47,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--debug-grades", action="store_true", help='Dump HTML for one course "个人成绩" page.')
     parser.add_argument("--fetch-all", action="store_true", help="Fetch all courses and all boards into unified Items.")
+    parser.add_argument("--run", action="store_true", help="Fetch all items and push Bark notifications (Step E).")
+    parser.add_argument("--dry-run", action="store_true", help="Do not push; only log pending notifications.")
     parser.add_argument("--course-query", default="", help="Substring to match the target course in portal list.")
     parser.add_argument("--course-limit", type=int, default=0, help="Limit courses fetched for --fetch-all (0 = no limit).")
+    parser.add_argument("--limit", type=int, default=0, help="Limit pushes for --run (0 = use POLL_LIMIT_PER_RUN).")
     parser.add_argument("--submitted-assignment-query", default="", help="Substring to match the submitted assignment title.")
     parser.add_argument("--unsubmitted-assignment-query", default="", help="Substring to match the unsubmitted assignment title.")
     parser.add_argument("--parse-announcements-html", default="", help="Parse a saved announcements HTML file (offline).")
@@ -83,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.items_json and not args.fetch_all:
         logger.error("--items-json must be used with --fetch-all")
+        return 2
+    if args.dry_run and not args.run:
+        logger.error("--dry-run must be used with --run")
         return 2
 
     if args.parse_announcements_html:
@@ -239,6 +246,89 @@ def main(argv: list[str] | None = None) -> int:
                 encoding="utf-8",
             )
             logger.info("wrote items json: %s", out_path)
+        logger.info("done")
+        return 0
+
+    if args.run:
+        from app.store import ack_state, fetch_records, mark_notified, upsert_seen
+
+        result = asyncio.run(
+            fetch_all_items(
+                state_path=config.bb_state_path,
+                portal_url=config.bb_courses_url or config.bb_base_url,
+                headless=config.headless,
+                course_limit=args.course_limit,
+            )
+        )
+        items = result.items
+        fps = [it.identity_fp() for it in items]
+        existing = fetch_records(config.db_path, fps)
+
+        pending: list[tuple[int, str, str, object]] = []
+        ack_pairs: list[tuple[str, str]] = []
+
+        for it in items:
+            fp = it.identity_fp()
+            state_fp = it.state_fp()
+            rec = existing.get(fp, {})
+            sent_state_fp = (rec.get("sent_state_fp", "") or "").strip()
+
+            # Never notified (new or previously failed pushes).
+            if not sent_state_fp:
+                msg = message_for_new_item(it.to_dict())
+                if msg:
+                    pending.append((100, fp, state_fp, msg))
+                continue
+
+            # No change since last notification.
+            if sent_state_fp == state_fp:
+                continue
+
+            # Updates: notify only for grade_item/assignment; others are acked to avoid noisy repeats.
+            if it.source in {"grade_item", "assignment"}:
+                msg = message_for_updated_item(new_item=it.to_dict(), old_raw=rec.get("raw", {}) or {})
+                if msg:
+                    pending.append((200, fp, state_fp, msg))
+                else:
+                    ack_pairs.append((fp, state_fp))
+            else:
+                ack_pairs.append((fp, state_fp))
+
+        # Always upsert latest state first; sent_state_fp is tracked separately.
+        upsert_seen(config.db_path, items)
+
+        # Ack ignored updates so they won't keep showing up as pending.
+        if ack_pairs:
+            ack_state(config.db_path, ack_pairs)
+
+        limit = args.limit if args.limit and args.limit > 0 else int(config.poll_limit_per_run)
+        pending.sort(key=lambda t: (-t[0], t[1]))
+        to_send = pending[:limit] if limit > 0 else pending
+
+        endpoint = (config.bark_endpoint or "").strip()
+        sent_pairs: list[tuple[str, str]] = []
+
+        logger.info("run summary: items=%d pending=%d limit=%d", len(items), len(pending), limit)
+        if not endpoint:
+            logger.warning("BARK_ENDPOINT is empty; will not push (use --dry-run to silence this).")
+
+        for _, fp, state_fp, msg in to_send:
+            # msg is BarkMessage, but keep runtime decoupled.
+            title = getattr(msg, "title", "")
+            body = getattr(msg, "body", "")
+            url = getattr(msg, "url", "")
+            logger.info("push planned: %s | %s", title, body.splitlines()[0] if body else "")
+            if args.dry_run or not endpoint:
+                continue
+            try:
+                send_bark(endpoint=endpoint, title=title, body=body, url=url)
+                sent_pairs.append((fp, state_fp))
+            except Exception as e:
+                logger.error("bark push failed (%s): %s", type(e).__name__, str(e)[:120])
+
+        if sent_pairs and not args.dry_run and endpoint:
+            mark_notified(config.db_path, sent_pairs)
+            logger.info("pushed: %d", len(sent_pairs))
         logger.info("done")
         return 0
 

@@ -87,6 +87,10 @@ Assignments 当前实现分两层：
 
 其它配置暂时可留空（推送/去重闭环在后续步骤实现）。
 
+`BARK_ENDPOINT` 支持两种写法：
+- 完整 URL：`https://api.day.app/<token>`
+- 只填 token：`<token>`（程序会自动补全为 `https://api.day.app/<token>`）
+
 ## 生成登录态（第一次需要）
 
 - `python scripts/export_state.py`
@@ -103,6 +107,9 @@ Assignments 当前实现分两层：
   - 每条 item 都会包含：
     - `fp`：稳定身份 key（用于 DB 一行对应一个评分项/公告/条目；优先 `course_id + source + external_id`，否则用 `url`）
     - `state_fp`：状态 hash（用于检测同一身份条目的变化，例如“未评分 → 出分”）
+- 跑一轮“抓取 → 去重（基于 fp/state_fp）→ Bark 推送”（Step E，建议先 dry-run）：`python -m app.main --run --dry-run`
+  - 限制只抓前 N 门课：`python -m app.main --run --dry-run --course-limit 1`
+  - 限制单次最多推送 N 条：`python -m app.main --run --limit 5`
 - 抓取某门课“课程通知”的 debug HTML：`python -m app.main --debug-announcements --course-query "信息学中的概率统计"`
   - Debug 文件：`data/debug_course_entry.html`、`data/debug_announcements.html`
   - 同时会在日志里输出解析到的公告数量与前 10 条（发布时间/标题/URL）

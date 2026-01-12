@@ -20,6 +20,7 @@ def init_db(db_path: Path) -> None:
               source TEXT,
               external_id TEXT,
               state_fp TEXT,
+              sent_state_fp TEXT,
               title TEXT,
               url TEXT,
               due TEXT,
@@ -41,9 +42,16 @@ def _migrate_items_table(conn: sqlite3.Connection) -> None:
     if "course" in cols and "course_name" not in cols:
         conn.execute("ALTER TABLE items ADD COLUMN course_name TEXT")
         conn.execute("UPDATE items SET course_name=course WHERE (course_name IS NULL OR course_name='') AND course IS NOT NULL AND course!=''")
-    for col in ["course_id", "course_name", "external_id", "state_fp", "updated_at"]:
+    for col in ["course_id", "course_name", "external_id", "state_fp", "sent_state_fp", "updated_at"]:
         if col not in cols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
+    # Backfill: if previously sent but no sent_state_fp recorded, treat current state_fp as last notified.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if "sent_state_fp" in cols and "state_fp" in cols and "sent_at" in cols:
+        conn.execute(
+            "UPDATE items SET sent_state_fp=state_fp "
+            "WHERE (sent_state_fp IS NULL OR sent_state_fp='') AND (sent_at IS NOT NULL AND sent_at!='') AND (state_fp IS NOT NULL AND state_fp!='')"
+        )
 
 
 def _now_iso() -> str:
@@ -174,5 +182,71 @@ def mark_sent(db_path: Path, fps: list[str]) -> int:
     with sqlite3.connect(db_path) as conn:
         _migrate_items_table(conn)
         cur = conn.executemany("UPDATE items SET sent_at=? WHERE fp=? AND (sent_at IS NULL OR sent_at='')", [(now, fp) for fp in fps])
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def fetch_records(db_path: Path, fps: list[str]) -> dict[str, dict]:
+    """
+    Fetch existing DB records for the given identity fps.
+    """
+    if not fps:
+        return {}
+    out: dict[str, dict] = {}
+    with sqlite3.connect(db_path) as conn:
+        _migrate_items_table(conn)
+        chunk_size = 900
+        for i in range(0, len(fps), chunk_size):
+            chunk = fps[i : i + chunk_size]
+            q = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT fp, COALESCE(state_fp,''), COALESCE(sent_state_fp,''), COALESCE(raw_json,''), COALESCE(sent_at,'') "
+                f"FROM items WHERE fp IN ({q})",
+                chunk,
+            ).fetchall()
+            for fp, state_fp, sent_state_fp, raw_json, sent_at in rows:
+                try:
+                    raw = json.loads(raw_json) if raw_json else {}
+                except Exception:
+                    raw = {}
+                out[str(fp)] = {
+                    "state_fp": str(state_fp or ""),
+                    "sent_state_fp": str(sent_state_fp or ""),
+                    "raw": raw,
+                    "sent_at": str(sent_at or ""),
+                }
+    return out
+
+
+def mark_notified(db_path: Path, pairs: list[tuple[str, str]]) -> int:
+    """
+    Mark (fp, state_fp) as notified; sets sent_at and sent_state_fp.
+    """
+    if not pairs:
+        return 0
+    now = _now_iso()
+    with sqlite3.connect(db_path) as conn:
+        _migrate_items_table(conn)
+        cur = conn.executemany(
+            "UPDATE items SET sent_at=?, sent_state_fp=? WHERE fp=?",
+            [(now, state_fp, fp) for fp, state_fp in pairs],
+        )
+        conn.commit()
+        return cur.rowcount or 0
+
+
+def ack_state(db_path: Path, pairs: list[tuple[str, str]]) -> int:
+    """
+    Acknowledge (fp, state_fp) without pushing (no sent_at update).
+    Useful when we intentionally ignore updates for certain sources.
+    """
+    if not pairs:
+        return 0
+    with sqlite3.connect(db_path) as conn:
+        _migrate_items_table(conn)
+        cur = conn.executemany(
+            "UPDATE items SET sent_state_fp=? WHERE fp=?",
+            [(state_fp, fp) for fp, state_fp in pairs],
+        )
         conn.commit()
         return cur.rowcount or 0
