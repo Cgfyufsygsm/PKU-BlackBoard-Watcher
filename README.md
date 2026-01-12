@@ -125,6 +125,9 @@ Assignments 当前实现分两层：
   - 限制只抓前 N 门课：`python -m app.main --run --dry-run --course-limit 1`
   - 限制单次最多推送 N 条：`python -m app.main --run --limit 5`
   - dry-run 预览写入文件（不发到手机）：`python -m app.main --run --dry-run --dry-run-out data/bark_preview.json`
+
+首次运行行为（避免刷屏）：
+- 如果 DB 里还没有任何已通知记录，`--run` 会只发 1 条“初始化完成”的 Bark，然后把当前抓到的所有条目标记为已通知；后续才开始推送新增/变更。
 - 抓取某门课“课程通知”的 debug HTML：`python -m app.main --debug-announcements --course-query "信息学中的概率统计"`
   - Debug 文件：`data/debug_course_entry.html`、`data/debug_announcements.html`
   - 同时会在日志里输出解析到的公告数量与前 10 条（发布时间/标题/URL）

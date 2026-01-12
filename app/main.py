@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.run:
-        from app.store import ack_state, fetch_records, mark_notified, upsert_seen
+        from app.store import ack_state, fetch_records, get_notification_counts, mark_notified, upsert_seen
 
         login = asyncio.run(
             ensure_login(
@@ -275,6 +275,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("login not ok: %s", login.note or login.final_url)
             return 2
 
+        total_rows, notified_rows = get_notification_counts(config.db_path)
+        is_bootstrap = notified_rows == 0
+
         result = asyncio.run(
             fetch_all_items(
                 state_path=config.bb_state_path,
@@ -284,6 +287,52 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         items = result.items
+
+        # First-run behavior: avoid spamming historical items.
+        # If the DB has no notified rows yet, send one initialization message and mark all current items as notified.
+        if is_bootstrap:
+            endpoint = (config.bark_endpoint or "").strip()
+            init_title = "PKU-BlackBoard-Watcher 初始化完成"
+            init_body = (
+                f"已同步历史记录：{len(items)} 条（课程：{len(result.courses)} 门）\n"
+                "后续仅推送新增/变更。"
+            )
+            logger.info("bootstrap mode: db_total=%d db_notified=%d items=%d courses=%d", total_rows, notified_rows, len(items), len(result.courses))
+
+            if args.dry_run:
+                # Still write preview file if requested; do not touch DB.
+                preview_out = Path(args.dry_run_out) if args.dry_run_out else (root / "data" / "bark_dry_run.json")
+                preview_out.parent.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "bootstrap": True,
+                    "db_total": total_rows,
+                    "db_notified": notified_rows,
+                    "items_total": len(items),
+                    "courses_total": len(result.courses),
+                    "messages": [{"title": init_title, "body": init_body, "url": ""}],
+                    "note": "bootstrap would mark all current items as notified",
+                }
+                preview_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                logger.info("wrote dry-run bark preview: %s", preview_out)
+                logger.info("done")
+                return 0
+
+            if not endpoint:
+                logger.error("bootstrap requires BARK_ENDPOINT to send the initialization message")
+                return 2
+
+            # Upsert first so mark_notified has rows to update.
+            upsert_seen(config.db_path, items)
+            try:
+                send_bark(endpoint=endpoint, title=init_title, body=init_body, url="")
+            except Exception as e:
+                logger.error("bootstrap bark push failed (%s): %s", type(e).__name__, str(e)[:120])
+                return 2
+            mark_notified(config.db_path, [(it.identity_fp(), it.state_fp()) for it in items])
+            logger.info("bootstrap done: marked %d items as notified", len(items))
+            logger.info("done")
+            return 0
+
         fps = [it.identity_fp() for it in items]
         existing = fetch_records(config.db_path, fps)
 

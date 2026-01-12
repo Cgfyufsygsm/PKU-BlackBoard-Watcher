@@ -36,6 +36,19 @@ def init_db(db_path: Path) -> None:
         conn.commit()
 
 
+def get_notification_counts(db_path: Path) -> tuple[int, int]:
+    """
+    Returns (total_rows, notified_rows).
+    notified_rows are rows with non-empty sent_state_fp.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        _migrate_items_table(conn)
+        total = int(conn.execute("SELECT COUNT(1) FROM items").fetchone()[0])
+        notified = int(conn.execute("SELECT COUNT(1) FROM items WHERE sent_state_fp IS NOT NULL AND sent_state_fp!=''").fetchone()[0])
+        return total, notified
+
+
 def _migrate_items_table(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
     # Old schema used `course` only; keep it if present but write to course_name.
