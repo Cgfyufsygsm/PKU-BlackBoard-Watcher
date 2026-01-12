@@ -7,11 +7,11 @@
 - Step A：项目骨架 + `python -m app.main` 可运行，日志写入 `logs/run.log`
 - Step B：Playwright 导出登录态 `data/storage_state.json`，并可做登录态校验
 - Step C：从 portal 页面保存 `data/debug_courses.html`，并从“在以下课程中，您是学生”区域提取当前学期课程链接（保守策略 + fallback）
-- 代码结构：`app/bb/` 已按登录/课程/公告拆分模块，方便后续继续扩展教学内容/作业/成绩
+- Step D：按“四个板块”逐个实现抓取与离线解析（先导出 debug HTML，再定 selector），并可导出 JSON 供人工核对
+- 代码结构：`app/bb/` 已按登录/课程/通知/教学内容/作业/成绩拆分模块，便于继续扩展与维护
 
 ## 下一步（准备做）
 
-- Step D：按“四个板块”逐个实现抓取（先导出 debug HTML，再定 selector）
 - Step E：SQLite 去重 + 推送闭环（新内容只推一次）
 - Step F：超时/重试/单课程失败隔离 + 更清晰日志
 
@@ -51,11 +51,13 @@ Assignments 当前实现分两层：
 - 已提交作业：页面可能是评分/查看模式；可通过“开始新的”（`action=newAttempt`）进入新提交界面以抓取统一的“作业信息”字段（到期日期/满分）
 
 4. 个人成绩（Grades）
-  - 评分项标题（例如作业/测验/期中等）
-  - 时间（若页面可读到：发布时间/评分时间/截止时间等，按页面语义取一个可用字段）
-  - 具体成绩（例如 95/100、A、已评分/未评分等原样字符串）
-  - 课程名（成绩页是分课程的）
-  - 详情 URL（若有）
+  - 评分项标题（`title`）
+  - 类别（`category`，来自 `<div class="itemCat">测试/作业</div>`；可能为空）
+  - 最后活动时间（`lastactivity`，由 `lastactivity="<ms>"` 规范化为 ISO8601 +08:00；同时保留 `lastactivity_display`）
+  - 成绩（`grade_raw` 原样字符串 + `grade` 数值化若可行）
+  - 满分（`points_possible_raw` 原样字符串 + `points_possible` 数值化若可行）
+  - 截止日期（若为作业评分项：`duedate`/`duedate_display`）
+  - 详情 URL（`url`；有些行没有链接则为空）
 
 说明：
 - 课程维度需要有“唯一标识符”（例如 Blackboard course_id / internal id），不要只用课程名：跨学期可能出现同名课程。后续数据模型会同时保存 `course_id` + `course_name`，并在去重/fingerprint 时优先使用 `course_id`。
@@ -110,6 +112,9 @@ Assignments 当前实现分两层：
 - 抓取“已提交/未提交”作业详情页样板：`python -m app.main --debug-assignment-samples --course-query "信息科学中的物理学（上）" --submitted-assignment-query "第十一次作业" --unsubmitted-assignment-query "第十二次作业"`
   - 输出：`data/debug_assignment_submitted.html`、`data/debug_assignment_submitted_new_attempt.html`、`data/debug_assignment_unsubmitted.html`
   - 同时会在日志里输出两份样板的“到期日期/满分”（已提交样板会优先用“开始新的”后的页面解析）
+- 抓取某门课“个人成绩”的 debug HTML：`python -m app.main --debug-grades --course-query "信息学中的概率统计"`
+  - Debug 文件：`data/debug_grades.html`
+- 离线解析已保存的“个人成绩”HTML：`python -m app.main --parse-grades-html data/debug_grades.html --grades-json data/grades.json`
 
 ## 产物位置
 

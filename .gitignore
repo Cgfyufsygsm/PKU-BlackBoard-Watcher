@@ -12,5 +12,6 @@ data/debug_*_frames/
 data/announcements.json
 data/teaching_content.json
 data/assignments.json
+data/grades.json
 
 logs/*.log
